@@ -4,6 +4,7 @@ import { useTrip } from '../lib/store.tsx'
 
 export interface PickedPlace {
   name?: string
+  address?: string
   lat?: number
   lng?: number
   url?: string
@@ -24,8 +25,8 @@ export function PlaceInput({ value, onPick }: { value: { lat?: number; lng?: num
     setBusy(true)
     setMsg('')
     try {
-      const r = await api<{ type: string; url: string; name?: string; lat?: number; lng?: number }>(`/t/${state.trip.id}/resolve-url`, { token, body: { url } })
-      onPick({ name: r.name, lat: r.lat, lng: r.lng, url: r.url })
+      const r = await api<{ type: string; url: string; name?: string; address?: string; lat?: number; lng?: number }>(`/t/${state.trip.id}/resolve-url`, { token, body: { url } })
+      onPick({ name: r.name, address: r.address, lat: r.lat, lng: r.lng, url: r.url })
       setMsg(r.lat != null ? `✔ 匯入成功${r.name ? `：${r.name}` : ''}` : r.name ? `✔ 抓到標題：${r.name}（沒有座標，可以再用「搜尋地點」補上）` : '已存成連結，但抓不到名稱，請手動填寫')
       setText('')
     } catch (e) {

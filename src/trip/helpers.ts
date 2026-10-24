@@ -36,6 +36,7 @@ export function mapsLink(d: { lat?: number; lng?: number; placeName?: string; ti
 export function nearbyLink(theme: string, sub: (typeof RECOMMEND)[number]['subs'][number], at: { lat?: number; lng?: number; placeName?: string; title?: string }) {
   const q = sub.q[themeInfo(theme).search]
   if (at.lat != null && at.lng != null) return `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${at.lat},${at.lng},16z`
+  // 沒座標時用「near」，否則 Google 會直接搜到該地點本身
   const place = at.placeName || at.title || ''
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${q} ${place}`.trim())}`
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place ? `${q} near ${place}` : q)}`
 }

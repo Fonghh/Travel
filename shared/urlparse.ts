@@ -2,6 +2,7 @@
 
 export interface ParsedPlace {
   name?: string
+  address?: string
   lat?: number
   lng?: number
 }
@@ -70,7 +71,10 @@ export function parseGoogleMapsUrl(raw: string): ParsedPlace | null {
     if (c) {
       if (out.lat == null) Object.assign(out, { lat: parseFloat(c[1]), lng: parseFloat(c[2]) })
     } else if (!out.name) {
-      out.name = v.trim()
+      // App 分享的網址常是「名稱, 地址」：拆開，避免標題變成一長串地址
+      const parts = v.split(/\s*[,，]\s*/)
+      out.name = parts[0].trim()
+      if (parts.length > 1) out.address = v.trim()
     }
   }
 
@@ -90,6 +94,18 @@ export function parseGoogleMapsUrl(raw: string): ParsedPlace | null {
 
   if (out.lat == null && !out.name) return null
   return out
+}
+
+/** 從 Google Maps 頁面 HTML 抓座標（og:image 的 staticmap center，或初始狀態中的畫面中心） */
+export function extractCoordsFromMapsHtml(html: string): { lat: number; lng: number } | null {
+  const m =
+    /staticmap\?center=(-?\d+(?:\.\d+)?)(?:%2C|,)(-?\d+(?:\.\d+)?)/.exec(html) ||
+    /APP_INITIALIZATION_STATE=\[\[\[[-\d.e]+,(-?\d+\.\d+),(-?\d+\.\d+)\]/.exec(html)
+  if (!m) return null
+  const isStatic = m[0].startsWith('staticmap')
+  const lat = parseFloat(isStatic ? m[1] : m[2])
+  const lng = parseFloat(isStatic ? m[2] : m[1])
+  return validCoord(lat, lng) && !(lat === 0 && lng === 0) ? { lat, lng } : null
 }
 
 // 一般網頁：抓 og:title 或 <title>
