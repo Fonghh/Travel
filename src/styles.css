@@ -256,7 +256,7 @@ h3 { font-size: 1.05rem; }
 .swatch { width: 34px; height: 34px; border-radius: 50%; border: var(--line) solid var(--ink); cursor: pointer; padding: 0; }
 .swatch[aria-pressed='true'] { outline: 3px solid var(--ink); outline-offset: 3px; }
 .map { height: calc(100dvh - var(--header-h) - 170px); min-height: 320px; border: var(--line) solid var(--ink); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow); background: #f3fafd; }
-.map .leaflet-tile-pane { filter: sepia(0.18) saturate(0.85) brightness(1.03); }
+.map .leaflet-tile-pane { filter: saturate(0.55) sepia(0.15) brightness(1.06) contrast(0.95); }
 .map-pin { display: grid; place-items: center; border-radius: 50%; border: 3px solid var(--ink); background: var(--white); box-shadow: 0 3px 0 var(--ink); }
 .map-pin.hollow { border-style: dashed; }
 .map-hop { font-size: 16px; text-align: center; line-height: 22px; background: var(--white); border: 2px solid var(--ink); border-radius: 50%; }

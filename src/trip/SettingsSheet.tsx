@@ -75,7 +75,22 @@ function Invite() {
     <div className="card flat yellow stack" style={{ gap: 6 }}>
       <h3>💌 邀請旅伴</h3>
       <p className="small">把連結傳到 LINE 群組，大家點開選自己、設 PIN 就能加入。</p>
-      <button className="btn coral" onClick={share}>分享邀請連結</button>
+      <div className="row">
+        <button className="btn coral grow" onClick={share}>分享邀請連結</button>
+        <button
+          className="btn white"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(url)
+              toast('已複製 📋 可以貼到主畫面 App 的首頁')
+            } catch {
+              prompt('複製這個連結：', url)
+            }
+          }}
+        >
+          複製
+        </button>
+      </div>
     </div>
   )
 }

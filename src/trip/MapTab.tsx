@@ -46,10 +46,10 @@ export default function MapTab() {
     if (!box.current || mapRef.current) return
     const map = L.map(box.current, { zoomControl: false, attributionControl: true }).setView([36.2, 138.2], 5)
     L.control.zoom({ position: 'bottomright' }).addTo(map)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // OpenStreetMap 官方圖磚：免金鑰，需標示出處
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      subdomains: 'abcd',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map)
     layerRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
