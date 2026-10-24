@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
-import { extractTitle, isShortMapsUrl, parseGoogleMapsUrl } from '../shared/urlparse.ts'
+import { extractCoordsFromMapsHtml, extractTitle, isShortMapsUrl, parseGoogleMapsUrl } from '../shared/urlparse.ts'
 import { KINDS, RESTORE_WINDOW_MS } from '../shared/types.ts'
 import type { Entity, Kind, Participants, TripSettings, TripState } from '../shared/types.ts'
 
@@ -577,7 +577,7 @@ t.post('/resolve-url', async (c) => {
   let current = u
   for (let i = 0; i < 6; i++) {
     const parsed = parseGoogleMapsUrl(current.href)
-    if (parsed) return c.json({ type: 'maps', url: u.href, ...parsed })
+    if (parsed?.lat != null) return c.json({ type: 'maps', url: u.href, ...parsed })
     if (!isShortMapsUrl(current)) break
     const res = await fetch(current.href, { redirect: 'manual', headers: { 'user-agent': UA } })
     const loc = res.headers.get('location')
@@ -585,7 +585,13 @@ t.post('/resolve-url', async (c) => {
     current = new URL(loc, current)
   }
   const parsed = parseGoogleMapsUrl(current.href)
-  if (parsed) return c.json({ type: 'maps', url: u.href, ...parsed })
+  if (parsed) {
+    // App 分享的網址常常只有名稱沒有座標：讀 Google Maps 頁面補座標，不行再用 OSM 查
+    const [page, osm] = await Promise.all([coordsFromMapsPage(current.href), geocodeFirst([parsed.address, parsed.name])])
+    // Google 頁面有時給的是預設畫面中心；跟 OSM 差太遠時以 OSM 為準
+    const coords = page && osm && distanceKm(page, osm) > 30 ? osm : (page ?? osm)
+    return c.json({ type: 'maps', url: u.href, ...parsed, ...coords })
+  }
 
   // 一般網頁：抓標題
   try {
@@ -611,15 +617,53 @@ t.post('/resolve-url', async (c) => {
   }
 })
 
+const BROWSER_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+
+async function coordsFromMapsPage(url: string) {
+  try {
+    const res = await fetch(url, { headers: { 'user-agent': BROWSER_UA, 'accept-language': 'zh-TW,zh;q=0.9,ja;q=0.8' } })
+    if (!res.ok) return null
+    return extractCoordsFromMapsHtml((await res.text()).slice(0, 400_000))
+  } catch {
+    return null
+  }
+}
+
+async function nominatim(q: string, limit = 6) {
+  const api = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${limit}&accept-language=zh-TW,ja,en&q=${encodeURIComponent(q)}`
+  const res = await fetch(api, { headers: { 'user-agent': UA }, cf: { cacheTtl: 86400, cacheEverything: true } })
+  if (!res.ok) return null
+  const list = await res.json<{ display_name: string; name?: string; lat: string; lon: string }[]>()
+  return list.map((r) => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon }))
+}
+
+function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = Math.PI / 180
+  const x = (b.lng - a.lng) * r * Math.cos(((a.lat + b.lat) / 2) * r)
+  const y = (b.lat - a.lat) * r
+  return Math.sqrt(x * x + y * y) * 6371
+}
+
+async function geocodeFirst(queries: (string | undefined)[]) {
+  for (const q of queries) {
+    if (!q) continue
+    try {
+      const r = await nominatim(q, 1)
+      if (r?.[0]) return { lat: r[0].lat, lng: r[0].lng }
+    } catch {
+      /* 換下一個 */
+    }
+  }
+  return null
+}
+
 t.get('/geocode', async (c) => {
   const q = (c.req.query('q') ?? '').trim()
   if (!q || q.length > 100) return c.json([])
   await rateLimit(c.env.DB, `geo:${c.get('me').id}`, 120, 3600_000)
-  const api = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=zh-TW,ja,en&q=${encodeURIComponent(q)}`
-  const res = await fetch(api, { headers: { 'user-agent': UA }, cf: { cacheTtl: 86400, cacheEverything: true } })
-  if (!res.ok) fail(502, '地點搜尋暫時無法使用')
-  const list = await res.json<{ display_name: string; name?: string; lat: string; lon: string }[]>()
-  return c.json(list.map((r) => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon })))
+  const list = await nominatim(q)
+  if (!list) fail(502, '地點搜尋暫時無法使用')
+  return c.json(list)
 })
 
 t.get('/fx', async (c) => {

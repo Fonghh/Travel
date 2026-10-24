@@ -86,7 +86,7 @@ function StayEditor({ stay, onClose }: { stay?: Entity<'stay'>; onClose: () => v
   return (
     <Sheet title={stay ? '編輯住宿' : '新增住宿'} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
-        <PlaceInput value={d} onPick={(p) => setD((x) => ({ ...x, name: x.name || p.name || '', lat: p.lat, lng: p.lng, url: p.url ?? x.url }))} />
+        <PlaceInput value={d} onPick={(p) => setD((x) => ({ ...x, name: x.name || p.name || '', address: x.address || p.address, lat: p.lat, lng: p.lng, url: p.url ?? x.url }))} />
         <Field label="住宿名稱"><input required maxLength={80} value={d.name} onChange={(e) => set('name', e.target.value)} placeholder="NASPA New Otani" /></Field>
         <div className="grid2">
           <Field label="入住日"><input type="date" required value={d.checkIn} onChange={(e) => set('checkIn', e.target.value)} /></Field>
