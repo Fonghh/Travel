@@ -673,18 +673,20 @@ t.post('/locate', async (c) => {
   if (!queries.length) fail(400, '沒有地名可以查')
   const near = body.near && Number.isFinite(body.near.lat) && Number.isFinite(body.near.lng) ? body.near : undefined
 
-  // Google：搜尋結果只有一筆時頁面中心就是該地點；多筆時只是畫面中心，落在參考點附近就不採信
+  // Google：搜尋結果唯一時，頁面中心就是該地點；找不到或有多筆時，只會回傳畫面中心。
+  // 所以刻意指定一個畫面中心（probe），回傳值跟它幾乎一樣就代表沒找到
+  const probe = near ?? { lat: 36.2, lng: 138.25 }
   let google: { lat: number; lng: number; query: string } | null = null
-  for (const q of queries.slice(0, 2)) {
-    const g = await coordsFromMapsPage(`https://www.google.com/maps/search/${encodeURIComponent(q)}`)
-    if (g && !(near && distanceKm(g, near) < 0.5)) {
+  for (const q of queries) {
+    const g = await coordsFromMapsPage(`https://www.google.com/maps/search/${encodeURIComponent(q)}/@${probe.lat},${probe.lng},9z`)
+    if (g && distanceKm(g, probe) > 1) {
       google = { ...g, query: q }
       break
     }
   }
   // OSM：Nominatim 規定每秒最多一次
   let osm: { lat: number; lng: number; query: string } | null = null
-  for (const [i, q] of queries.slice(0, 2).entries()) {
+  for (const [i, q] of queries.entries()) {
     if (i) await new Promise((r) => setTimeout(r, 1100))
     const r = await nominatim(q, 1, near).catch(() => null)
     if (r?.[0]) {
@@ -693,16 +695,16 @@ t.post('/locate', async (c) => {
     }
   }
 
-  const pick = (p: { lat: number; lng: number; query: string }, source: string, confidence: 'high' | 'medium' | 'low') => c.json({ ...p, source, confidence })
   if (google && osm) {
-    if (distanceKm(google, osm) <= 30) return pick(google, 'google', 'high')
-    if (near) return distanceKm(google, near) <= distanceKm(osm, near) ? pick(google, 'google', 'low') : pick(osm, 'osm', 'low')
-    return pick(osm, 'osm', 'low')
+    if (distanceKm(google, osm) <= 30) return c.json({ ...google, source: 'google', confidence: 'high' })
+    // 兩邊差很遠：不替使用者決定，兩個都回傳讓他確認
+    return c.json({ notFound: true, guesses: [{ ...google, source: 'google' }, { ...osm, source: 'osm' }] })
   }
-  const one = google ? { p: google, s: 'google' } : osm ? { p: osm, s: 'osm' } : null
+  const one = google ? { ...google, source: 'google' } : osm ? { ...osm, source: 'osm' } : null
   if (!one) return c.json({ notFound: true })
-  // 離行程很遠（例如同名地點在別的縣市）就標成低可信度
-  return pick(one.p, one.s, near && distanceKm(one.p, near) > 300 ? 'low' : 'medium')
+  // 離行程很遠（例如同名地點在別的縣市）也交給使用者確認
+  if (near && distanceKm(one, near) > 300) return c.json({ notFound: true, guesses: [one] })
+  return c.json({ ...one, confidence: 'medium' })
 })
 
 t.get('/geocode', async (c) => {

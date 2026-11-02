@@ -121,10 +121,13 @@ interface Candidate extends ExtractedPlace {
   key: number
   checked: boolean
   category: SpotCategory
-  status: 'coords' | 'locating' | 'found' | 'notfound' | 'manual' | 'waiting'
-  confidence?: 'high' | 'medium' | 'low'
+  status: 'coords' | 'locating' | 'found' | 'notfound' | 'manual' | 'waiting' | 'guess' | 'picked'
+  confidence?: 'high' | 'medium'
   source?: string
+  guesses?: Guess[]
 }
+
+interface Guess { lat: number; lng: number; source: string; query: string }
 
 function AddSpotsSheet({ onClose }: { onClose: () => void }) {
   const { state, token, save, toast } = useTrip()
@@ -157,11 +160,12 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
       }
       update(c.key, { status: 'locating' })
       try {
-        const r = await api<{ lat?: number; lng?: number; source?: string; confidence?: Candidate['confidence']; notFound?: boolean }>(`/t/${state.trip.id}/locate`, {
+        const r = await api<{ lat?: number; lng?: number; source?: string; confidence?: Candidate['confidence']; notFound?: boolean; guesses?: Guess[] }>(`/t/${state.trip.id}/locate`, {
           token,
           body: { queries: c.queries, near },
         })
-        update(c.key, r.notFound ? { status: 'notfound' } : { status: 'found', lat: r.lat, lng: r.lng, confidence: r.confidence, source: r.source })
+        if (r.guesses?.length) update(c.key, { status: 'guess', guesses: r.guesses })
+        else update(c.key, r.notFound ? { status: 'notfound' } : { status: 'found', lat: r.lat, lng: r.lng, confidence: r.confidence, source: r.source })
       } catch {
         update(c.key, { status: 'notfound' })
       }
@@ -186,7 +190,7 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
     if (!chosen.length) return
     onClose()
     for (const [i, c] of chosen.entries()) {
-      const data: SpotData = { title: c.name.trim(), category: c.category, lat: c.lat, lng: c.lng, source: source.trim() || undefined }
+      const data: SpotData = { title: c.name.trim(), category: c.category, lat: c.lat, lng: c.lng, address: c.area, source: source.trim() || undefined }
       const last = i === chosen.length - 1
       await save('spot', data, { activity: last ? `把 ${chosen.length} 個地點加進口袋名單 ⭐${chosen.length <= 3 ? `：${chosen.map((x) => x.name).join('、')}` : ''}` : undefined })
     }
@@ -250,14 +254,17 @@ const STATUS_TEXT: Record<Candidate['status'], string> = {
   found: '📍 已找到',
   notfound: '❓ 找不到座標，可以按「修正」貼 Google Maps 連結',
   manual: '📍 已用你貼的連結',
+  picked: '📍 已選用推測的位置',
+  guess: '⚠️ 找不到確定的位置，下面是推測的結果，請按「看」確認後再選',
 }
+
+const SOURCE_NAME: Record<string, string> = { google: 'Google', osm: 'OpenStreetMap' }
 
 function CandidateRow({ c, near, onChange }: { c: Candidate; near?: { lat: number; lng: number }; onChange: (p: Partial<Candidate>) => void }) {
   const { state, token, toast } = useTrip()
   const [fixing, setFixing] = useState(false)
   const [link, setLink] = useState('')
-  const status =
-    c.status === 'found' && c.confidence === 'low' ? '⚠️ 找到了，但可能不準（建議按「查看」確認）' : c.status === 'found' && c.confidence === 'high' ? '📍 已找到（兩個來源一致）' : STATUS_TEXT[c.status]
+  const status = c.status === 'found' && c.confidence === 'high' ? '📍 已找到（兩個來源一致）' : STATUS_TEXT[c.status]
 
   async function applyLink() {
     try {
@@ -280,7 +287,16 @@ function CandidateRow({ c, near, onChange }: { c: Candidate; near?: { lat: numbe
           <button key={k.id} type="button" aria-pressed={c.category === k.id} onClick={() => onChange({ category: k.id })} style={{ padding: '2px 8px' }}>{k.icon}</button>
         ))}
       </div>
+      {c.area && <div className="small muted" style={{ width: '100%' }}>地區：{c.area}</div>}
       <div className="small" style={{ width: '100%' }}>{status}</div>
+      {c.status === 'guess' &&
+        c.guesses?.map((g) => (
+          <div key={g.source} className="row small" style={{ width: '100%', gap: 6 }}>
+            <span className="grow">{SOURCE_NAME[g.source] ?? g.source} 的推測</span>
+            <a className="btn white sm" href={`https://www.google.com/maps/search/?api=1&query=${g.lat},${g.lng}`} target="_blank" rel="noreferrer">看</a>
+            <button className="btn sm" onClick={() => onChange({ lat: g.lat, lng: g.lng, status: 'picked', guesses: undefined })}>用這個</button>
+          </div>
+        ))}
       <div className="row wrap" style={{ gap: 6, width: '100%' }}>
         <a className="btn white sm" href={c.lat != null ? `https://www.google.com/maps/search/?api=1&query=${c.lat},${c.lng}` : googleSearch(c.queries[0] ?? c.name, near)} target="_blank" rel="noreferrer">🔍 在 Google Maps 查看</a>
         <button className="btn white sm" onClick={() => setFixing(!fixing)}>🔧 修正</button>
