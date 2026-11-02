@@ -2,6 +2,8 @@
 
 export interface ExtractedPlace {
   name: string
+  /** 「地區｜名稱」格式裡的地區，用來縮小查詢範圍 */
+  area?: string
   /** 查座標時依序嘗試的字串（日文名稱優先） */
   queries: string[]
   lat?: number
@@ -91,6 +93,37 @@ function isSentence(raw: string): boolean {
   return /[。！？!?]$/.test(t) || /[，。]/.test(t)
 }
 
+const ASCII = /^[\x00-\x7F]+$/
+// 📍 之類的圖示常被截圖辨識成這些字，出現在地區最前面時去掉
+const OCR_JUNK = /^[甲丫申由](?=\S{2,})/
+
+/** 「富士市｜大淵笹場 Obuchi Sasaba」→ 地區、名稱 */
+function splitArea(line: string): { area?: string; name: string } | null {
+  const m = /^(.{1,14}?)\s*[｜|]\s*(.+)$/.exec(line)
+  if (!m) return null
+  const left = clean(m[1]).replace(OCR_JUNK, '')
+  const name = clean(m[2])
+  // 地區要有中日文、不能有數字（例如「11E15」是辨識錯的圖示）
+  const area = /[\u3040-\u30ff\u4e00-\u9fff]/.test(left) && !/\d/.test(left) && left.length <= 12 ? left : undefined
+  return { area, name }
+}
+
+/** 有地區時：中日文名稱＋地區最好查，再試整個名稱、英文名稱 */
+export function areaQueries(name: string, area?: string): string[] {
+  if (!area) return searchQueries(name)
+  const words = name.split(' ').filter(Boolean)
+  const cjk = words.filter((w) => !ASCII.test(w)).join(' ')
+  const en = words.filter((w) => ASCII.test(w)).join(' ')
+  const out: string[] = []
+  if (cjk.length >= 2 && en && cjk !== area && !area.includes(cjk)) out.push(`${cjk} ${area}`)
+  out.push(`${name} ${area}`)
+  if (en.length >= 4 && cjk) out.push(`${en} ${area}`)
+  out.push(name)
+  if (cjk.length >= 2 && en) out.push(cjk)
+  if (en.length >= 4 && cjk) out.push(en)
+  return [...new Set(out)]
+}
+
 function looksLikePlace(s: string): boolean {
   if (!s || s.length < 2 || s.length > 40) return false
   if (/^[\d\s.,:/\-]+$/.test(s)) return false // 只有數字
@@ -117,10 +150,11 @@ export function extractPlaces(text: string): { places: ExtractedPlace[]; urls: s
       continue
     }
     if (candidates !== numbered && isSentence(raw)) continue
-    const name = clean(raw)
+    const split = splitArea(raw)
+    const name = split ? split.name : clean(raw)
     if (!looksLikePlace(name) || seen.has(name)) continue
     seen.add(name)
-    places.push({ name, queries: searchQueries(name) })
+    places.push({ name, area: split?.area, queries: areaQueries(name, split?.area) })
   }
   return { places, urls }
 }

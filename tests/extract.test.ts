@@ -64,3 +64,26 @@ https://www.instagram.com/reel/C9abcD12/`)
 test('名稱查詢順序：單一名稱就是自己', () => {
   assert.deepEqual(searchQueries('河口湖駅'), ['河口湖駅'])
 })
+
+// 使用者實測：「地區｜名稱」格式，📍 被辨識成「甲」「丫」
+const AREA_LIST = `甲富士市｜大淵笹場 Obuchi Sasaba
+甲伊豆｜大室山 Mt.Omuro
+丫三島｜三島 SKY WALK
+富士宮市｜Cafe SHIZEN
+11E15 | Forest Adventure`
+
+test('地區｜名稱：拆出地區、去掉誤認的 📍、組合查詢', () => {
+  const { places } = extractPlaces(AREA_LIST)
+  assert.deepEqual(places.map((p) => [p.name, p.area]), [
+    ['大淵笹場 Obuchi Sasaba', '富士市'],
+    ['大室山 Mt.Omuro', '伊豆'],
+    ['三島 SKY WALK', '三島'],
+    ['Cafe SHIZEN', '富士宮市'],
+    ['Forest Adventure', undefined],
+  ])
+  assert.deepEqual(places[0].queries.slice(0, 3), ['大淵笹場 富士市', '大淵笹場 Obuchi Sasaba 富士市', 'Obuchi Sasaba 富士市'])
+  assert.deepEqual(places[1].queries.slice(0, 2), ['大室山 伊豆', '大室山 Mt.Omuro 伊豆'])
+  assert.equal(places[2].queries[0], '三島 SKY WALK 三島')
+  assert.equal(places[3].queries[0], 'Cafe SHIZEN 富士宮市')
+  assert.equal(places[4].queries[0], 'Forest Adventure')
+})
