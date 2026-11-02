@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Entity, ItemData, Participants, SpotCategory, SpotData, TripState } from '../../shared/types.ts'
-import { extractPlaces } from '../../shared/extract.ts'
+import { areaQueries, extractPlaces } from '../../shared/extract.ts'
 import type { ExtractedPlace } from '../../shared/extract.ts'
 import { guessSpotCategory, SPOT_CATS, spotCat, TRANSPORTS } from '../data.ts'
 import { api } from '../lib/api.ts'
@@ -88,6 +88,20 @@ export function SpotsTab() {
                     {d.lat == null && ' ・❓ 沒座標'}
                   </div>
                 </div>
+                {!readOnly && (
+                  <div className="row" style={{ gap: 4 }}>
+                    <button className="icon-btn sm" onClick={() => setEdit(s)} aria-label="編輯">✏️</button>
+                    {(s.createdBy === me.id || me.role === 'leader') && (
+                      <button
+                        className="icon-btn sm"
+                        aria-label="刪除"
+                        onClick={() => confirm(`要把「${d.title}」移出口袋名單嗎？（7 天內可在設定裡還原）`) && remove(s.id, `把「${d.title}」移出口袋名單`)}
+                      >
+                        🗑
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {d.note && <div className="small" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{d.note}</div>}
               {it && <div className="tag" style={{ marginTop: 6, background: 'var(--green)' }}>✅ 已排入 {fmtDate(it.data.date)}{it.data.time && ` ${it.data.time}`}</div>}
@@ -104,7 +118,6 @@ export function SpotsTab() {
                 {link && <a className="btn white sm" href={link} target="_blank" rel="noreferrer">📍</a>}
                 {d.source && <a className="btn white sm" href={d.source} target="_blank" rel="noreferrer" aria-label="來源">🔗</a>}
                 {!readOnly && !it && <button className="btn white sm" onClick={() => setScheduling(s)}>📅 排進行程</button>}
-                {!readOnly && <button className="btn white sm" onClick={() => setEdit(s)} aria-label="編輯">✏️</button>}
               </div>
             </article>
           )
@@ -131,7 +144,8 @@ interface Guess { lat: number; lng: number; source: string; query: string }
 
 function AddSpotsSheet({ onClose }: { onClose: () => void }) {
   const { state, token, save, toast } = useTrip()
-  const [mode, setMode] = useState<'text' | 'single'>('text')
+  const [mode, setMode] = useState<'text' | 'link' | 'single'>('text')
+  const [reel, setReel] = useState<ReelResult & { url: string }>()
   const [text, setText] = useState('')
   const [source, setSource] = useState('')
   const [cands, setCands] = useState<Candidate[]>([])
@@ -139,8 +153,16 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
   const near = useMemo(() => tripCenter(state), [state])
   const update = (key: number, patch: Partial<Candidate>) => setCands((cs) => cs.map((c) => (c.key === key ? { ...c, ...patch } : c)))
 
-  async function analyze(input = text) {
-    const { places, urls } = extractPlaces(input)
+  async function analyze(input = text, preset?: ExtractedPlace[]) {
+    // 只貼了一個社群貼文連結：改走 Gemini 找文字
+    const only = input.trim()
+    if (!preset && /^https?:\/\/\S+$/.test(only) && SOCIAL.test(only)) {
+      setMode('link')
+      return findReel(only)
+    }
+    const extracted = extractPlaces(input)
+    const places = preset?.length ? preset : extracted.places
+    const urls = extracted.urls
     if (!source && urls[0]) setSource(urls[0])
     const list: Candidate[] = places.map((p, i) => ({
       ...p,
@@ -174,6 +196,30 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
     setBusy(false)
   }
 
+  async function findReel(url: string) {
+    setReel(undefined)
+    setBusy(true)
+    try {
+      const r = await api<ReelResult>(`/t/${state.trip.id}/reel`, { token, body: { url } })
+      setReel({ ...r, url })
+    } catch (e) {
+      toast((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function useReel() {
+    if (!reel) return
+    const caption = reel.caption ?? reel.places.map((p) => (p.area ? `${p.area}｜${p.name}` : p.name)).join('\n')
+    setText(caption)
+    setSource(reel.url)
+    setMode('text')
+    // Gemini 已經挑出地點就直接用，否則用規則解析說明文字
+    const preset: ExtractedPlace[] = reel.places.map((p) => ({ name: p.name, area: p.area, queries: areaQueries(p.name, p.area) }))
+    analyze(caption, preset)
+  }
+
   async function pasteFromClipboard() {
     try {
       const t = await navigator.clipboard.readText()
@@ -200,11 +246,14 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
     <Sheet title="＋ 加到口袋名單" onClose={onClose}>
       <div className="stack">
         <div className="seg">
-          <button aria-pressed={mode === 'text'} onClick={() => setMode('text')}>📝 貼上文字（可多個）</button>
+          <button aria-pressed={mode === 'text'} onClick={() => setMode('text')}>📝 貼上文字</button>
+          <button aria-pressed={mode === 'link'} onClick={() => setMode('link')}>🔗 貼文連結</button>
           <button aria-pressed={mode === 'single'} onClick={() => setMode('single')}>📍 單一地點</button>
         </div>
 
         {mode === 'single' && <SingleSpotForm onDone={onClose} />}
+
+        {mode === 'link' && <ReelPanel reel={reel} busy={busy} onFind={findReel} onUse={useReel} onFallback={() => setMode('text')} />}
 
         {mode === 'text' && (
           <>
@@ -244,6 +293,44 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </Sheet>
+  )
+}
+
+const SOCIAL = /^https?:\/\/([\w-]+\.)*(instagram\.com|tiktok\.com|youtube\.com|youtu\.be|xiaohongshu\.com|xhslink\.com|threads\.net|facebook\.com)\//i
+
+interface ReelResult {
+  found: boolean
+  caption: string | null
+  places: { name: string; area?: string }[]
+  verified: boolean
+}
+
+function ReelPanel({ reel, busy, onFind, onUse, onFallback }: { reel?: ReelResult & { url: string }; busy: boolean; onFind: (url: string) => void; onUse: () => void; onFallback: () => void }) {
+  const [url, setUrl] = useState(reel?.url ?? '')
+  return (
+    <div className="stack">
+      <p className="small muted">貼上 Instagram Reels、TikTok、YouTube Shorts、小紅書的連結。Gemini 會用 Google 搜尋找出這篇貼文的文字與地點（不會直接存取這些平台）。</p>
+      <div className="row">
+        <input className="input grow" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.instagram.com/reel/…" inputMode="url" />
+        <button className="btn sm" disabled={busy || !SOCIAL.test(url.trim())} onClick={() => onFind(url.trim())}>{busy ? '找…' : '🤖 找文字'}</button>
+      </div>
+      {busy && <div className="small">🔎 Gemini 搜尋中，大約要 10–30 秒…</div>}
+      {reel && !busy && (reel.found ? (
+        <div className="card flat stack" style={{ padding: 12, gap: 8 }}>
+          <div className="small">
+            {reel.verified ? '✅ 在 Google 搜尋結果裡找到這篇貼文' : '⚠️ 搜尋來源無法確認是這篇貼文，Gemini 可能找錯或自己補寫，請核對下面的文字'}
+          </div>
+          {reel.caption && <div className="small" style={{ whiteSpace: 'pre-wrap', maxHeight: 180, overflow: 'auto', background: 'var(--paper)', padding: 8, borderRadius: 10 }}>{reel.caption}</div>}
+          <div className="small">找到 {reel.places.length} 個地點{reel.places.length > 0 && `：${reel.places.slice(0, 5).map((p) => p.name).join('、')}${reel.places.length > 5 ? '…' : ''}`}</div>
+          <button className="btn coral block" onClick={onUse}>用這些找座標 →</button>
+        </div>
+      ) : (
+        <div className="card flat coral stack" style={{ padding: 12, gap: 8 }}>
+          <div className="small">😢 Google 上找不到這篇貼文的文字。可能是剛發布還沒被收錄，或地點清單在留言裡。</div>
+          <button className="btn white block" onClick={onFallback}>改用截圖文字</button>
+        </div>
+      ))}
+    </div>
   )
 }
 
