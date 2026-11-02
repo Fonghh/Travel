@@ -6,6 +6,7 @@ import { Avatar } from '../components/ui.tsx'
 import { countdownParts, myDeparture } from './helpers.ts'
 import { HomeTab } from './HomeTab.tsx'
 import { PlanTab } from './PlanTab.tsx'
+import { SpotsTab } from './SpotsTab.tsx'
 import { MoneyTab } from './MoneyTab.tsx'
 import { TodoTab } from './TodoTab.tsx'
 import { StayTab } from './StayTab.tsx'
@@ -17,6 +18,7 @@ const MapTab = lazy(() => import('./MapTab.tsx'))
 const TABS = [
   ['home', '首頁'],
   ['plan', '行程'],
+  ['spots', '口袋'],
   ['map', '地圖'],
   ['money', '記帳'],
   ['todo', '待辦'],
@@ -115,6 +117,7 @@ function Shell({ tab }: { tab: string }) {
         {state.trip.settings.closed && <div className="banner">🎉 這趟旅行已結案，所有資料都只能查看</div>}
         {tab === 'home' && <HomeTab />}
         {tab === 'plan' && <PlanTab />}
+        {tab === 'spots' && <SpotsTab />}
         {tab === 'map' && (
           <Suspense fallback={<p className="muted center">地圖展開中… 🗺️</p>}>
             <MapTab />

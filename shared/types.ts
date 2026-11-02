@@ -84,6 +84,23 @@ export interface PaymentData { from: string; to: string; amount: number } // 台
 
 export interface AnnounceData { text: string; pinned: boolean }
 
+export type SpotCategory = 'eat' | 'drink' | 'play' | 'fun' | 'other'
+/** 口袋名單：還沒排進哪一天的想去地點 */
+export interface SpotData {
+  title: string
+  category: SpotCategory
+  lat?: number
+  lng?: number
+  address?: string
+  url?: string // 地點連結（Google Maps 等）
+  source?: string // 來源（Reels、部落格…）
+  note?: string
+  scheduledItemId?: string // 已排進的行程
+}
+
+/** 口袋名單的「想去 +1」，id 為 `${spotId}:${memberId}` */
+export interface VoteData { spotId: string; memberId: string }
+
 export interface KindMap {
   item: ItemData
   flight: FlightData
@@ -94,9 +111,11 @@ export interface KindMap {
   expense: ExpenseData
   payment: PaymentData
   announce: AnnounceData
+  spot: SpotData
+  vote: VoteData
 }
 export type Kind = keyof KindMap
-export const KINDS: Kind[] = ['item', 'flight', 'stay', 'todo', 'check', 'checkin', 'expense', 'payment', 'announce']
+export const KINDS: Kind[] = ['item', 'flight', 'stay', 'todo', 'check', 'checkin', 'expense', 'payment', 'announce', 'spot', 'vote']
 
 export interface Entity<K extends Kind = Kind> {
   id: string
