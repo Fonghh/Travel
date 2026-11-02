@@ -201,7 +201,7 @@ function Members() {
   )
 }
 
-const KIND_LABEL: Record<string, string> = { item: '行程', flight: '航班', stay: '住宿', todo: '待辦', expense: '記帳', payment: '還款', announce: '公告' }
+const KIND_LABEL: Record<string, string> = { item: '行程', flight: '航班', stay: '住宿', todo: '待辦', expense: '記帳', payment: '還款', announce: '公告', spot: '口袋' }
 
 function Trash() {
   const { state, restore, member, readOnly } = useTrip()

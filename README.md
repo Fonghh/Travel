@@ -48,3 +48,14 @@ npm run typecheck
 4. 打開 `https://travel.<你的子網域>.workers.dev`，用開團密碼建立第一趟旅行
 
 之後每次合併到 `main` 就會自動部署。
+
+## Gemini（貼文連結找地點）
+
+口袋名單的「🔗 貼文連結」會請 Gemini 用 Google 搜尋找出貼文的說明文字和地點，不會直接存取社群平台。
+
+1. 到 [Google AI Studio](https://aistudio.google.com/apikey) 建立 API 金鑰
+2. Cloudflare → 該 Worker 的 **Settings → Variables and Secrets**（不是 Build 裡的那個）→ Add
+   - Type **Secret**，名稱 `GEMINI_API_KEY`，值貼上金鑰
+3. （可選）想換模型：再加一個 Text 變數 `GEMINI_MODEL`，例如 `gemini-3-flash-preview`；預設是 `gemini-flash-latest`
+
+沒設定金鑰時，其他功能照常運作，只有貼文連結會提示改用截圖文字。

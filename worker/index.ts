@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { parseJsonBlock } from '../shared/json.ts'
 import { extractCoordsFromMapsHtml, extractTitle, isShortMapsUrl, parseGoogleMapsUrl } from '../shared/urlparse.ts'
 import { KINDS, RESTORE_WINDOW_MS } from '../shared/types.ts'
 import type { Entity, Kind, Participants, TripSettings, TripState } from '../shared/types.ts'
@@ -8,6 +9,8 @@ interface Env {
   DB: D1Database
   ASSETS: Fetcher
   CREATE_CODE?: string
+  GEMINI_API_KEY?: string
+  GEMINI_MODEL?: string
 }
 
 interface MemberRow {
@@ -664,6 +667,68 @@ async function geocodeFirst(queries: (string | undefined)[]) {
   }
   return null
 }
+
+// ---------- 社群貼文連結 → 用 Gemini＋Google 搜尋找說明文字（不直接存取社群平台） ----------
+
+const SOCIAL_HOSTS = /(^|\.)(instagram\.com|tiktok\.com|youtube\.com|youtu\.be|xiaohongshu\.com|xhslink\.com|threads\.net|facebook\.com)$/
+
+interface GeminiResponse {
+  candidates?: {
+    content?: { parts?: { text?: string }[] }
+    groundingMetadata?: { groundingChunks?: { web?: { uri?: string; title?: string } }[] }
+  }[]
+  error?: { message?: string; status?: string }
+}
+
+t.post('/reel', async (c) => {
+  if (!c.env.GEMINI_API_KEY) fail(503, '網站還沒設定 Gemini 金鑰（GEMINI_API_KEY）')
+  await rateLimit(c.env.DB, `reel:${c.get('me').id}`, 30, 86400_000)
+  const { url } = await c.req.json<{ url: string }>()
+  let u: URL
+  try {
+    u = new URL(String(url).trim())
+  } catch {
+    return fail(400, '這不是有效的網址')
+  }
+  if (!SOCIAL_HOSTS.test(u.hostname)) fail(400, '目前支援 Instagram、TikTok、YouTube、小紅書、Threads、Facebook 的貼文連結')
+  const link = `${u.origin}${u.pathname}` // 去掉追蹤參數
+  const code = /\/(?:p|reels?|tv|video|shorts)\/([\w-]{5,})/.exec(u.pathname)?.[1]
+
+  const prompt = `請用 Google 搜尋找出這篇社群貼文的內容：${link}${code ? `（貼文代碼 ${code}）` : ''}
+目標：找出貼文的說明文字（caption），以及裡面介紹的地點（店家、景點、車站等）。
+規則：
+- 只根據搜尋到的資料回答，找不到就說找不到，絕對不要猜測或編造。
+- 地點名稱保留原文（日文就用日文）；有寫地區（市、町、縣）就放在 area。
+- 只回傳一個 JSON，不要其他文字：
+{"found": true 或 false, "caption": "說明文字原文，找不到就 null", "places": [{"name": "地點名稱", "area": "地區或 null"}]}`
+
+  const model = c.env.GEMINI_MODEL || 'gemini-flash-latest'
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': c.env.GEMINI_API_KEY! },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 1 } }),
+    signal: AbortSignal.timeout(45_000),
+  })
+  const j = await res.json<GeminiResponse>().catch(() => ({}) as GeminiResponse)
+  if (!res.ok) {
+    if (res.status === 429) fail(429, 'Gemini 今天的免費額度用完了，請改用截圖文字')
+    console.error('gemini', res.status, j.error)
+    fail(502, `Gemini 回應錯誤：${j.error?.message?.slice(0, 120) ?? res.status}`)
+  }
+  const cand = j.candidates?.[0]
+  const text = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+  const out = parseJsonBlock(text)
+  const sources = (cand?.groundingMetadata?.groundingChunks ?? []).map((g) => ({ title: g.web?.title ?? '', uri: g.web?.uri ?? '' }))
+  // 搜尋來源裡有這個平台（或貼文代碼）才算查到這篇；否則可能是模型自己編的
+  const host = u.hostname.replace(/^www\./, '').split('.').slice(-2).join('.')
+  const verified = sources.some((s) => s.title.includes(host) || (code && (s.uri.includes(code) || s.title.includes(code))))
+  const caption = typeof out?.caption === 'string' && out.caption.trim() ? out.caption.trim().slice(0, 4000) : null
+  const places = (Array.isArray(out?.places) ? out!.places : [])
+    .map((p: any) => ({ name: String(p?.name ?? '').trim().slice(0, 80), area: p?.area ? String(p.area).trim().slice(0, 20) : undefined }))
+    .filter((p: { name: string }) => p.name)
+    .slice(0, 30)
+  return c.json({ found: out?.found === true && (!!caption || places.length > 0), caption, places, verified, sources: sources.slice(0, 5) })
+})
 
 // 口袋名單：替一個地名找座標。Google Maps 與 OSM 交叉比對
 t.post('/locate', async (c) => {
