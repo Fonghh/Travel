@@ -680,6 +680,25 @@ const GEMINI_ERROR_TEXT: Record<GeminiErrorKind, string> = {
   other: '其他錯誤',
 }
 
+async function geminiPlainCheck(key: string, models: string[]): Promise<string> {
+  for (const model of models) {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: '回答「好」' }] }] }),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (res.ok) return `🩺 檢查：不用 Google 搜尋時 ${model} 可以正常回答 → 金鑰沒問題，是「Google 搜尋」功能在目前方案用不了。`
+      const msg = (await res.json<GeminiResponse>().catch(() => ({}) as GeminiResponse)).error?.message ?? ''
+      if (res.status === 400 || res.status === 401 || res.status === 403) return `🩺 檢查：金鑰可能有問題（${res.status} ${msg.slice(0, 100)}）`
+    } catch {
+      /* 換下一個 */
+    }
+  }
+  return '🩺 檢查：連一般問答都失敗，可能是整個帳號的額度或金鑰問題。'
+}
+
 const SOCIAL_HOSTS = /(^|\.)(instagram\.com|tiktok\.com|youtube\.com|youtu\.be|xiaohongshu\.com|xhslink\.com|threads\.net|facebook\.com)$/
 
 interface GeminiResponse {
@@ -739,11 +758,15 @@ t.post('/reel', async (c) => {
     const msg = body.error?.message ?? ''
     const kind = classifyGeminiError(res.status, msg)
     console.error('gemini', model, res.status, kind, msg.slice(0, 300))
-    tried.push(`${model}：${GEMINI_ERROR_TEXT[kind]}`)
+    tried.push(`${model}：${GEMINI_ERROR_TEXT[kind]}（${res.status} ${msg.replace(/\s+/g, ' ').slice(0, 120)}）`)
     if (tryNextModel(kind)) continue
     fail(502, `Gemini 回應錯誤（${model}）：${msg.slice(0, 150) || res.status}`)
   }
-  if (!j) fail(429, `Gemini 暫時無法使用，請先改用截圖文字。各模型的狀況：${tried.join('；')}`)
+  if (!j) {
+    // 健康檢查：不開 Google 搜尋，只問一句話。成功代表金鑰正常、是搜尋功能在目前方案用不了
+    const plain = await geminiPlainCheck(c.env.GEMINI_API_KEY!, geminiModels(c.env.GEMINI_MODEL))
+    fail(429, `Gemini 暫時無法使用，請先改用截圖文字。\n${plain}\n各模型的狀況：\n${tried.join('\n')}`)
+  }
   const cand = j!.candidates?.[0]
   const text = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
   const out = parseJsonBlock(text)
