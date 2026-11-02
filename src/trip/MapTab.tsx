@@ -7,7 +7,9 @@ import { colorHex, transportInfo } from '../data.ts'
 import { useTrip } from '../lib/store.tsx'
 import { fmtDate } from '../lib/time.ts'
 import { prefersReduced } from '../lib/motion.ts'
-import { Avatar } from '../components/ui.tsx'
+import { Avatar, Sheet } from '../components/ui.tsx'
+import { buildKml } from '../lib/kml.ts'
+import type { KmlFolder, KmlPlace } from '../lib/kml.ts'
 import { mapsLink, sortItems } from './helpers.ts'
 import { matchFilter, MemberFilterBar, useDates } from './PlanTab.tsx'
 import type { MemberFilter } from './PlanTab.tsx'
@@ -23,6 +25,7 @@ export default function MapTab() {
   const dates = useDates()
   const [date, setDate] = useState('all')
   const [filter, setFilter] = useState<MemberFilter>('all')
+  const [exportOpen, setExportOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -147,7 +150,114 @@ export default function MapTab() {
           </button>
         ))}
       </div>
+      <button className="btn white block" onClick={() => setExportOpen(true)}>📤 匯出到 Google 我的地圖</button>
+      {exportOpen && <ExportSheet date={date} filter={filter} onClose={() => setExportOpen(false)} />}
       <p className="small muted">實線＝打卡去過、虛線＝計畫中。{noCoords > 0 && `有 ${noCoords} 個行程沒有座標，編輯時用「貼網址」或「搜尋地點」補上就會出現在地圖上。`}</p>
     </>
+  )
+}
+
+function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFilter; onClose: () => void }) {
+  const { state, list, me, member, toast } = useTrip()
+  const [withStays, setWithStays] = useState(true)
+  const who = filter === 'all' ? undefined : filter === 'me' ? me : member(filter)
+  const checkins = list('checkin')
+  const items = list('item')
+    .filter((i) => i.data.lat != null && i.data.lng != null)
+    .filter((i) => date === 'all' || i.data.date === date)
+    .filter((i) => matchFilter(i.data.participants, filter, me.id))
+    .sort(sortItems)
+  const stays = list('stay').filter((s) => s.data.lat != null && s.data.lng != null && matchFilter(s.data.participants, filter, me.id))
+
+  function build() {
+    const byDate = new Map<string, KmlPlace[]>()
+    for (const it of items) {
+      const d = it.data
+      const p = d.participants
+      const people = p === 'all' ? '全員' : p.map((id) => member(id)?.name).filter(Boolean).join('、')
+      const desc = [
+        `${fmtDate(d.date)} ${d.time}${d.endTime ? `–${d.endTime}` : ''}`.trim(),
+        `👥 ${people}`,
+        d.transport !== 'none' ? `${transportInfo(d.transport).icon} ${transportInfo(d.transport).label}` : '',
+        d.mustGo ? '⭐ 必去' : '',
+        d.note ?? '',
+        d.url ?? '',
+      ].filter(Boolean).join('\n')
+      const visited = checkins.some((c) => c.data.itemId === it.id)
+      const place: KmlPlace = {
+        name: `${d.time ? d.time + ' ' : ''}${d.title}`,
+        lat: d.lat!,
+        lng: d.lng!,
+        description: desc,
+        style: visited ? 'visited' : d.meetup ? 'meetup' : d.mustGo ? 'must' : 'normal',
+      }
+      byDate.set(d.date, [...(byDate.get(d.date) ?? []), place])
+    }
+    const folders: KmlFolder[] = [...byDate.entries()].map(([d, places]) => ({
+      name: fmtDate(d),
+      places,
+      route: who ? { name: `${who.name}的路線 ${fmtDate(d, false)}`, color: colorHex(who.color) } : undefined,
+    }))
+    if (withStays && stays.length) {
+      folders.push({
+        name: '🏨 住宿',
+        places: stays.map((s) => ({
+          name: s.data.name,
+          lat: s.data.lat!,
+          lng: s.data.lng!,
+          description: [`${fmtDate(s.data.checkIn)} – ${fmtDate(s.data.checkOut)}`, s.data.address ?? '', s.data.bookingRef ? `訂房代號 ${s.data.bookingRef}` : ''].filter(Boolean).join('\n'),
+          style: 'stay' as const,
+        })),
+      })
+    }
+    const title = [state.trip.name, who?.name, date === 'all' ? '' : fmtDate(date, false)].filter(Boolean).join(' ')
+    return { kml: buildKml(title, folders), title }
+  }
+
+  async function download() {
+    const { kml, title } = build()
+    // 檔名用英數字（部分瀏覽器遇到中文檔名會改成 download）；匯入後顯示的是 KML 內的中文名稱
+    const filename = ['travel', state.trip.id, who?.id, date === 'all' ? '' : date].filter(Boolean).join('-') + '.kml'
+    const file = new File([kml], filename, { type: 'application/vnd.google-earth.kml+xml' })
+    // iPhone：用分享選單，可以存到「檔案」、AirDrop 或寄給自己
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title })
+        return
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return
+      }
+    }
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+    toast('已下載 KML 檔')
+  }
+
+  const count = items.length + (withStays ? stays.length : 0)
+  return (
+    <Sheet title="📤 匯出到 Google 我的地圖" onClose={onClose}>
+      <div className="stack">
+        <div className="card flat paper small" style={{ padding: 12 }}>
+          範圍：{date === 'all' ? '全部日期' : fmtDate(date)}・{who ? `${who.name}的行程（含路線）` : '所有人的行程'}
+          <br />
+          共 {count} 個地點（沒有座標的行程不會匯出）
+        </div>
+        <label className="check"><input type="checkbox" checked={withStays} onChange={(e) => setWithStays(e.target.checked)} /> 包含住宿</label>
+        <button className="btn coral block" onClick={download} disabled={!count}>下載 KML 檔</button>
+        <div className="stack small" style={{ gap: 6 }}>
+          <b>匯入 Google 我的地圖</b>
+          <span>1. 把 KML 檔存到「檔案」或寄給自己，用<b>電腦</b>打開 mymaps.google.com（手機網頁版不能匯入）</span>
+          <span>2. 「建立新地圖」→ 左邊圖層下的「匯入」→ 選這個 KML 檔</span>
+          <span>3. 手機打開 Google Maps →「已儲存」→ 最下方「地圖」，就看得到了，也能直接導航</span>
+          <span className="muted">行程有更新時，重新匯出，再刪掉舊圖層、匯入新的即可。地圖上方的篩選（日期、看某人）會決定匯出的範圍。</span>
+        </div>
+      </div>
+    </Sheet>
   )
 }
