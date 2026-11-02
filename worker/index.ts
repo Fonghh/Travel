@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { parseJsonBlock } from '../shared/json.ts'
+import { classifyGeminiError, geminiModels, tryNextModel } from '../shared/gemini.ts'
+import type { GeminiErrorKind } from '../shared/gemini.ts'
 import { extractCoordsFromMapsHtml, extractTitle, isShortMapsUrl, parseGoogleMapsUrl } from '../shared/urlparse.ts'
 import { KINDS, RESTORE_WINDOW_MS } from '../shared/types.ts'
 import type { Entity, Kind, Participants, TripSettings, TripState } from '../shared/types.ts'
@@ -670,6 +672,14 @@ async function geocodeFirst(queries: (string | undefined)[]) {
 
 // ---------- 社群貼文連結 → 用 Gemini＋Google 搜尋找說明文字（不直接存取社群平台） ----------
 
+const GEMINI_ERROR_TEXT: Record<GeminiErrorKind, string> = {
+  'no-quota': '免費方案沒有額度',
+  unavailable: '模型不存在或不支援搜尋',
+  daily: '今日額度用完',
+  rate: '太頻繁',
+  other: '其他錯誤',
+}
+
 const SOCIAL_HOSTS = /(^|\.)(instagram\.com|tiktok\.com|youtube\.com|youtu\.be|xiaohongshu\.com|xhslink\.com|threads\.net|facebook\.com)$/
 
 interface GeminiResponse {
@@ -702,20 +712,39 @@ t.post('/reel', async (c) => {
 - 只回傳一個 JSON，不要其他文字：
 {"found": true 或 false, "caption": "說明文字原文，找不到就 null", "places": [{"name": "地點名稱", "area": "地區或 null"}]}`
 
-  const model = c.env.GEMINI_MODEL || 'gemini-flash-latest'
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': c.env.GEMINI_API_KEY! },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 1 } }),
-    signal: AbortSignal.timeout(45_000),
-  })
-  const j = await res.json<GeminiResponse>().catch(() => ({}) as GeminiResponse)
-  if (!res.ok) {
-    if (res.status === 429) fail(429, 'Gemini 今天的免費額度用完了，請改用截圖文字')
-    console.error('gemini', res.status, j.error)
-    fail(502, `Gemini 回應錯誤：${j.error?.message?.slice(0, 120) ?? res.status}`)
+  // 依序試模型：沒有免費額度（limit: 0）或模型不存在就換下一個
+  const tried: string[] = []
+  let j: GeminiResponse | null = null
+  let usedModel = ''
+  for (const model of geminiModels(c.env.GEMINI_MODEL)) {
+    let res: Response
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': c.env.GEMINI_API_KEY! },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 1 } }),
+        signal: AbortSignal.timeout(25_000),
+      })
+    } catch (e) {
+      console.error('gemini', model, 'fetch failed', String(e))
+      tried.push(`${model}：連線失敗或逾時`)
+      continue
+    }
+    const body = await res.json<GeminiResponse>().catch(() => ({}) as GeminiResponse)
+    if (res.ok) {
+      j = body
+      usedModel = model
+      break
+    }
+    const msg = body.error?.message ?? ''
+    const kind = classifyGeminiError(res.status, msg)
+    console.error('gemini', model, res.status, kind, msg.slice(0, 300))
+    tried.push(`${model}：${GEMINI_ERROR_TEXT[kind]}`)
+    if (tryNextModel(kind)) continue
+    fail(502, `Gemini 回應錯誤（${model}）：${msg.slice(0, 150) || res.status}`)
   }
-  const cand = j.candidates?.[0]
+  if (!j) fail(429, `Gemini 暫時無法使用，請先改用截圖文字。各模型的狀況：${tried.join('；')}`)
+  const cand = j!.candidates?.[0]
   const text = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
   const out = parseJsonBlock(text)
   const sources = (cand?.groundingMetadata?.groundingChunks ?? []).map((g) => ({ title: g.web?.title ?? '', uri: g.web?.uri ?? '' }))
@@ -727,7 +756,7 @@ t.post('/reel', async (c) => {
     .map((p: any) => ({ name: String(p?.name ?? '').trim().slice(0, 80), area: p?.area ? String(p.area).trim().slice(0, 20) : undefined }))
     .filter((p: { name: string }) => p.name)
     .slice(0, 30)
-  return c.json({ found: out?.found === true && (!!caption || places.length > 0), caption, places, verified, sources: sources.slice(0, 5) })
+  return c.json({ found: out?.found === true && (!!caption || places.length > 0), caption, places, verified, sources: sources.slice(0, 5), model: usedModel })
 })
 
 // 口袋名單：替一個地名找座標。Google Maps 與 OSM 交叉比對

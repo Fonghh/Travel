@@ -56,6 +56,8 @@ npm run typecheck
 1. 到 [Google AI Studio](https://aistudio.google.com/apikey) 建立 API 金鑰
 2. Cloudflare → 該 Worker 的 **Settings → Variables and Secrets**（不是 Build 裡的那個）→ Add
    - Type **Secret**，名稱 `GEMINI_API_KEY`，值貼上金鑰
-3. （可選）想換模型：再加一個 Text 變數 `GEMINI_MODEL`，例如 `gemini-3-flash-preview`；預設是 `gemini-flash-latest`
+3. （可選）指定模型：再加一個 Text 變數 `GEMINI_MODEL`，可用逗號列多個，依序嘗試，例如 `gemini-2.5-flash,gemini-flash-latest`。
+   不設定時預設依序試 `gemini-2.5-flash`、`gemini-flash-latest`、`gemini-flash-lite-latest`、`gemini-2.5-flash-lite`；
+   某個模型沒有免費額度（Google 回 `limit: 0`）、額度用完或不存在，就自動換下一個
 
 沒設定金鑰時，其他功能照常運作，只有貼文連結會提示改用截圖文字。
