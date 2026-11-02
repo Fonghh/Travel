@@ -5,7 +5,7 @@ export interface KmlPlace {
   lat: number
   lng: number
   description?: string
-  style?: 'must' | 'meetup' | 'normal' | 'stay' | 'visited'
+  style?: 'must' | 'meetup' | 'normal' | 'stay' | 'visited' | 'spot'
 }
 
 export interface KmlFolder {
@@ -29,6 +29,7 @@ const ICONS: Record<NonNullable<KmlPlace['style']>, string> = {
   normal: 'https://maps.google.com/mapfiles/kml/paddle/blu-circle.png',
   visited: 'https://maps.google.com/mapfiles/kml/paddle/grn-circle.png',
   stay: 'https://maps.google.com/mapfiles/kml/paddle/purple-square.png',
+  spot: 'https://maps.google.com/mapfiles/kml/paddle/ylw-stars.png',
 }
 
 export function buildKml(docName: string, folders: KmlFolder[]): string {

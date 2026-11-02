@@ -357,7 +357,12 @@ function canWrite(c: C, kind: Kind, id: string, old: { data: any; created_by: st
       return
     case 'check':
     case 'checkin':
+    case 'vote':
       if (!id.endsWith(':' + me) || (data && data.memberId !== me)) fail(403, '只能幫自己打勾')
+      return
+    case 'spot':
+      // 大家都能新增、修改；刪除限加入的人或團長
+      if (old && !data && !leader && old.created_by !== me) fail(403, '只有加入的人或團長可以刪除')
       return
     case 'expense':
       if (s.expensesLocked) fail(423, '團長已鎖定結算，不能再改記帳')
@@ -380,6 +385,7 @@ function validData(kind: Kind, data: any) {
   if (kind === 'item' && (!DATE.test(data.date) || typeof data.title !== 'string' || !data.title.trim())) fail(400, '行程要有日期和名稱')
   if (kind === 'expense' && (!(data.amount > 0) || typeof data.payer !== 'string')) fail(400, '金額要大於 0')
   if (kind === 'payment' && !(data.amount > 0)) fail(400, '金額要大於 0')
+  if (kind === 'spot' && (typeof data.title !== 'string' || !data.title.trim())) fail(400, '地點要有名稱')
 }
 
 t.post('/entities', async (c) => {
@@ -427,7 +433,7 @@ t.delete('/entities/:id', async (c) => {
   if (!old) return c.json({ ok: true })
   canWrite(c, old.kind, id, { data: JSON.parse(old.data), created_by: old.created_by }, null)
   // 打勾類直接刪掉，其他的保留 7 天可還原
-  if (old.kind === 'check' || old.kind === 'checkin') {
+  if (old.kind === 'check' || old.kind === 'checkin' || old.kind === 'vote') {
     await db.prepare('DELETE FROM entities WHERE trip_id = ? AND id = ?').bind(trip.id, id).run()
   } else {
     await db.prepare('UPDATE entities SET deleted_at = ?, updated_by = ? WHERE trip_id = ? AND id = ?').bind(now(), c.get('me').id, trip.id, id).run()
@@ -629,8 +635,10 @@ async function coordsFromMapsPage(url: string) {
   }
 }
 
-async function nominatim(q: string, limit = 6) {
-  const api = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${limit}&accept-language=zh-TW,ja,en&q=${encodeURIComponent(q)}`
+async function nominatim(q: string, limit = 6, near?: { lat: number; lng: number }) {
+  // near：優先找附近（viewbox 只是偏好，不限制在範圍內）
+  const box = near ? `&viewbox=${near.lng - 1.5},${near.lat + 1.5},${near.lng + 1.5},${near.lat - 1.5}` : ''
+  const api = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${limit}&accept-language=zh-TW,ja,en${box}&q=${encodeURIComponent(q)}`
   const res = await fetch(api, { headers: { 'user-agent': UA }, cf: { cacheTtl: 86400, cacheEverything: true } })
   if (!res.ok) return null
   const list = await res.json<{ display_name: string; name?: string; lat: string; lon: string }[]>()
@@ -656,6 +664,46 @@ async function geocodeFirst(queries: (string | undefined)[]) {
   }
   return null
 }
+
+// 口袋名單：替一個地名找座標。Google Maps 與 OSM 交叉比對
+t.post('/locate', async (c) => {
+  await rateLimit(c.env.DB, `locate:${c.get('me').id}`, 300, 3600_000)
+  const body = await c.req.json<{ queries?: unknown; near?: { lat: number; lng: number } }>()
+  const queries = (Array.isArray(body.queries) ? body.queries : []).filter((q): q is string => typeof q === 'string' && !!q.trim()).slice(0, 3)
+  if (!queries.length) fail(400, '沒有地名可以查')
+  const near = body.near && Number.isFinite(body.near.lat) && Number.isFinite(body.near.lng) ? body.near : undefined
+
+  // Google：搜尋結果只有一筆時頁面中心就是該地點；多筆時只是畫面中心，落在參考點附近就不採信
+  let google: { lat: number; lng: number; query: string } | null = null
+  for (const q of queries.slice(0, 2)) {
+    const g = await coordsFromMapsPage(`https://www.google.com/maps/search/${encodeURIComponent(q)}`)
+    if (g && !(near && distanceKm(g, near) < 0.5)) {
+      google = { ...g, query: q }
+      break
+    }
+  }
+  // OSM：Nominatim 規定每秒最多一次
+  let osm: { lat: number; lng: number; query: string } | null = null
+  for (const [i, q] of queries.slice(0, 2).entries()) {
+    if (i) await new Promise((r) => setTimeout(r, 1100))
+    const r = await nominatim(q, 1, near).catch(() => null)
+    if (r?.[0]) {
+      osm = { lat: r[0].lat, lng: r[0].lng, query: q }
+      break
+    }
+  }
+
+  const pick = (p: { lat: number; lng: number; query: string }, source: string, confidence: 'high' | 'medium' | 'low') => c.json({ ...p, source, confidence })
+  if (google && osm) {
+    if (distanceKm(google, osm) <= 30) return pick(google, 'google', 'high')
+    if (near) return distanceKm(google, near) <= distanceKm(osm, near) ? pick(google, 'google', 'low') : pick(osm, 'osm', 'low')
+    return pick(osm, 'osm', 'low')
+  }
+  const one = google ? { p: google, s: 'google' } : osm ? { p: osm, s: 'osm' } : null
+  if (!one) return c.json({ notFound: true })
+  // 離行程很遠（例如同名地點在別的縣市）就標成低可信度
+  return pick(one.p, one.s, near && distanceKm(one.p, near) > 300 ? 'low' : 'medium')
+})
 
 t.get('/geocode', async (c) => {
   const q = (c.req.query('q') ?? '').trim()

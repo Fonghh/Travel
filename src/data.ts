@@ -124,3 +124,23 @@ export const RECOMMEND: { id: string; label: string; icon: string; color: string
     { label: '便利商店', q: { ja: 'コンビニ', ko: '편의점', zh: '便利商店', en: 'convenience store' } },
   ] },
 ]
+
+// 口袋名單分類
+export const SPOT_CATS: { id: import('../shared/types.ts').SpotCategory; label: string; icon: string; color: string }[] = [
+  { id: 'eat', label: '吃', icon: '🍜', color: '#F2A497' },
+  { id: 'drink', label: '喝', icon: '☕', color: '#F6D27A' },
+  { id: 'play', label: '玩', icon: '🎡', color: '#A8D3E6' },
+  { id: 'fun', label: '樂', icon: '🛍️', color: '#B9DAA5' },
+  { id: 'other', label: '其他', icon: '📍', color: '#EFE8DA' },
+]
+export const spotCat = (id: string) => SPOT_CATS.find((c) => c.id === id) ?? SPOT_CATS[SPOT_CATS.length - 1]
+
+/** 依名稱猜分類（猜錯可以在確認時改） */
+export function guessSpotCategory(name: string): import('../shared/types.ts').SpotCategory {
+  const n = name.toLowerCase()
+  if (/カフェ|珈琲|喫茶|coffee|cafe|咖啡|居酒屋|酒蔵|酒造|ぽんしゅ|bar|バー|ビール|brew|茶屋|甘味/.test(n)) return 'drink'
+  if (/ラーメン|らーめん|拉麵|そば|蕎麦|うどん|寿司|鮨|壽司|焼肉|燒肉|食堂|定食|丼|カレー|餐廳|料理|レストラン|ramen|sushi|grill|パン|ベーカリー|甜點|スイーツ/.test(n)) return 'eat'
+  if (/outlet|アウトレット|モール|mall|商店街|市場|百貨|ドンキ|ドラッグ|藥妝|土産|おみやげ|伴手禮|shop|ショップ|ストア/.test(n)) return 'fun'
+  if (/駅|站|線|神社|寺|宮|城|浜|湖|山|岳|公園|園|滝|橋|展望|美術館|博物館|温泉|溫泉|スキー|ski|タワー|塔|島|岬|渓|峡|museum|park|temple|shrine/.test(n)) return 'play'
+  return 'other'
+}

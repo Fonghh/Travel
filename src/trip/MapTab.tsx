@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import L from 'leaflet'
 import type { Entity } from '../../shared/types.ts'
 import { AnimalFace } from '../art/animals.tsx'
-import { colorHex, transportInfo } from '../data.ts'
+import { colorHex, spotCat, transportInfo } from '../data.ts'
 import { useTrip } from '../lib/store.tsx'
 import { fmtDate } from '../lib/time.ts'
 import { prefersReduced } from '../lib/motion.ts'
@@ -26,6 +26,7 @@ export default function MapTab() {
   const [date, setDate] = useState('all')
   const [filter, setFilter] = useState<MemberFilter>('all')
   const [exportOpen, setExportOpen] = useState(false)
+  const [showSpots, setShowSpots] = useState(true)
   const box = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -41,6 +42,8 @@ export default function MapTab() {
     [list, date, filter, me.id],
   )
   const stays = list('stay').filter((s) => s.data.lat != null && matchFilter(s.data.participants, filter, me.id))
+  const spots = showSpots ? unscheduledSpots(list('spot'), list('item')) : []
+  const voteCount = (id: string) => list('vote').filter((v) => v.data.spotId === id).length
   const checkins = list('checkin')
   const visitedBy = (itemId: string, memberId: string) => checkins.some((c) => c.data.itemId === itemId && c.data.memberId === memberId)
   const routeMembers = state.members.filter((m) => (filter === 'all' ? true : m.id === (filter === 'me' ? me.id : filter)))
@@ -118,6 +121,16 @@ export default function MapTab() {
         .addTo(layer)
       bounds.push([it.data.lat!, it.data.lng!])
     }
+    for (const sp of spots) {
+      const c = spotCat(sp.data.category)
+      const icon = L.divIcon({ className: '', html: `<div class="map-pin hollow" style="width:34px;height:34px;background:#FDF3D6;font-size:17px">${c.icon}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] })
+      const n = voteCount(sp.id)
+      const link = mapsLink({ ...sp.data, name: sp.data.title })
+      L.marker([sp.data.lat!, sp.data.lng!], { icon })
+        .bindPopup(`<b>⭐ ${esc(sp.data.title)}</b><br>口袋名單・${c.label}${n ? `・🙋 ${n} 人想去` : ''}${link ? `<br><a href="${esc(link)}" target="_blank" rel="noreferrer">在 Google Maps 開啟</a>` : ''}`)
+        .addTo(layer)
+      bounds.push([sp.data.lat!, sp.data.lng!])
+    }
     for (const s of stays) {
       const icon = L.divIcon({ className: '', html: `<div class="map-pin" style="width:36px;height:36px;background:#A8D3E6;font-size:18px">🏨</div>`, iconSize: [36, 36], iconAnchor: [18, 18] })
       L.marker([s.data.lat!, s.data.lng!], { icon }).bindPopup(`<b>${esc(s.data.name)}</b><br>${fmtDate(s.data.checkIn)} – ${fmtDate(s.data.checkOut)}`).addTo(layer)
@@ -150,6 +163,7 @@ export default function MapTab() {
           </button>
         ))}
       </div>
+      <label className="check small"><input type="checkbox" checked={showSpots} onChange={(e) => setShowSpots(e.target.checked)} /> 顯示口袋名單（⭐ 還沒排進行程的地點）</label>
       <button className="btn white block" onClick={() => setExportOpen(true)}>📤 匯出到 Google 我的地圖</button>
       {exportOpen && <ExportSheet date={date} filter={filter} onClose={() => setExportOpen(false)} />}
       <p className="small muted">實線＝打卡去過、虛線＝計畫中。{noCoords > 0 && `有 ${noCoords} 個行程沒有座標，編輯時用「貼網址」或「搜尋地點」補上就會出現在地圖上。`}</p>
@@ -160,6 +174,8 @@ export default function MapTab() {
 function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFilter; onClose: () => void }) {
   const { state, list, me, member, toast } = useTrip()
   const [withStays, setWithStays] = useState(true)
+  const [withSpots, setWithSpots] = useState(true)
+  const spots = unscheduledSpots(list('spot'), list('item'))
   const who = filter === 'all' ? undefined : filter === 'me' ? me : member(filter)
   const checkins = list('checkin')
   const items = list('item')
@@ -210,6 +226,21 @@ function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFi
         })),
       })
     }
+    if (withSpots && spots.length) {
+      folders.push({
+        name: '⭐ 口袋名單',
+        places: spots.map((sp) => {
+          const n = list('vote').filter((v) => v.data.spotId === sp.id).length
+          return {
+            name: sp.data.title,
+            lat: sp.data.lat!,
+            lng: sp.data.lng!,
+            description: [`${spotCat(sp.data.category).icon} ${spotCat(sp.data.category).label}`, n ? `🙋 ${n} 人想去` : '', sp.data.note ?? '', sp.data.source ?? ''].filter(Boolean).join('\n'),
+            style: 'spot' as const,
+          }
+        }),
+      })
+    }
     const title = [state.trip.name, who?.name, date === 'all' ? '' : fmtDate(date, false)].filter(Boolean).join(' ')
     return { kml: buildKml(title, folders), title }
   }
@@ -239,7 +270,7 @@ function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFi
     toast('已下載 KML 檔')
   }
 
-  const count = items.length + (withStays ? stays.length : 0)
+  const count = items.length + (withStays ? stays.length : 0) + (withSpots ? spots.length : 0)
   return (
     <Sheet title="📤 匯出到 Google 我的地圖" onClose={onClose}>
       <div className="stack">
@@ -249,6 +280,7 @@ function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFi
           共 {count} 個地點（沒有座標的行程不會匯出）
         </div>
         <label className="check"><input type="checkbox" checked={withStays} onChange={(e) => setWithStays(e.target.checked)} /> 包含住宿</label>
+        <label className="check"><input type="checkbox" checked={withSpots} onChange={(e) => setWithSpots(e.target.checked)} /> 包含口袋名單（{spots.length} 個）</label>
         <button className="btn coral block" onClick={download} disabled={!count}>下載 KML 檔</button>
         <div className="stack small" style={{ gap: 6 }}>
           <b>匯入 Google 我的地圖</b>
@@ -260,4 +292,10 @@ function ExportSheet({ date, filter, onClose }: { date: string; filter: MemberFi
       </div>
     </Sheet>
   )
+}
+
+/** 有座標、還沒排進行程的口袋地點 */
+function unscheduledSpots(spots: Entity<'spot'>[], items: Entity<'item'>[]) {
+  const itemIds = new Set(items.map((i) => i.id))
+  return spots.filter((s) => s.data.lat != null && s.data.lng != null && !(s.data.scheduledItemId && itemIds.has(s.data.scheduledItemId)))
 }
