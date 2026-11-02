@@ -6,6 +6,7 @@ import { dateRange, fmtDate, todayIn, weekday } from '../lib/time.ts'
 import { Avatar, Empty, Field, inParticipants, ParticipantsPicker, ParticipantsView, Sheet } from '../components/ui.tsx'
 import { mapsLink, nearbyLink, sortItems } from './helpers.ts'
 import { PlaceInput } from './PlaceInput.tsx'
+import { routeLinks } from '../lib/gmaps.ts'
 
 export type MemberFilter = 'all' | 'me' | string
 
@@ -79,6 +80,7 @@ export function PlanTab() {
   const [edit, setEdit] = useState<Entity<'item'> | 'new'>()
   const [rec, setRec] = useState<Entity<'item'>>()
   const [checkin, setCheckin] = useState<Entity<'item'>>()
+  const [routeOpen, setRouteOpen] = useState(false)
   const current = dates.includes(date) ? date : dates[0]
   const pickDate = (d: string) => {
     setDate(d)
@@ -93,6 +95,11 @@ export function PlanTab() {
   const marks = new Set(items.filter((i) => matchFilter(i.data.participants, filter, me.id)).map((i) => i.data.date))
   const dayItems = items.filter((i) => i.data.date === current && matchFilter(i.data.participants, filter, me.id)).sort(sortItems)
   const stays = list('stay').filter((s) => s.data.checkIn <= current && current < s.data.checkOut && matchFilter(s.data.participants, filter, me.id))
+  // 路線是某一個人的：「全部」時用自己的
+  const routeWho = filter === 'all' ? 'me' : filter
+  const routeItems = items
+    .filter((i) => i.data.date === current && i.data.lat != null && i.data.lng != null && matchFilter(i.data.participants, routeWho, me.id))
+    .sort(sortItems)
 
   return (
     <>
@@ -101,6 +108,9 @@ export function PlanTab() {
         <h2>{fmtDate(current)}</h2>
         <MemberFilterBar value={filter} onChange={setFilter} />
       </div>
+      {routeItems.length > 0 && (
+        <button className="btn white sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRouteOpen(true)}>🧭 用 Google Maps 開啟路線</button>
+      )}
       <div key={current + filter} className="timeline">
         {!dayItems.length && <Empty icon="🗺️">這天還沒有行程。<br />說走就走，按右下角＋加一個吧！</Empty>}
         {dayItems.map((it, idx) => (
@@ -122,7 +132,46 @@ export function PlanTab() {
       {edit && <ItemEditor item={edit === 'new' ? undefined : edit} date={current} onClose={() => setEdit(undefined)} />}
       {rec && <RecommendSheet item={rec} onClose={() => setRec(undefined)} />}
       {checkin && <CheckinSheet item={checkin} onClose={() => setCheckin(undefined)} />}
+      {routeOpen && (
+        <RouteSheet items={routeItems} who={routeWho === 'me' ? '你' : (state.members.find((m) => m.id === routeWho)?.name ?? '')} date={current} onClose={() => setRouteOpen(false)} />
+      )}
     </>
+  )
+}
+
+const MODES = [
+  ['', '自動'],
+  ['transit', '大眾運輸'],
+  ['driving', '開車'],
+  ['walking', '步行'],
+] as const
+
+function RouteSheet({ items, who, date, onClose }: { items: Entity<'item'>[]; who: string; date: string; onClose: () => void }) {
+  const [fromCurrent, setFromCurrent] = useState(false)
+  const [mode, setMode] = useState('')
+  const links = routeLinks(
+    items.map((i) => ({ lat: i.data.lat!, lng: i.data.lng! })),
+    { fromCurrent, travelmode: mode || undefined },
+  )
+  return (
+    <Sheet title="🧭 Google Maps 路線" onClose={onClose}>
+      <div className="stack">
+        <p className="small muted">{who}在 {fmtDate(date)} 有座標的 {items.length} 個地點，依時間串成路線：</p>
+        <ol className="small" style={{ margin: 0, paddingLeft: 22 }}>
+          {items.map((i) => <li key={i.id}>{i.data.time && `${i.data.time} `}{i.data.title}</li>)}
+        </ol>
+        <label className="check"><input type="checkbox" checked={fromCurrent} onChange={(e) => setFromCurrent(e.target.checked)} /> 從我現在的位置出發</label>
+        <div className="seg">
+          {MODES.map(([v, label]) => <button key={v} type="button" aria-pressed={mode === v} onClick={() => setMode(v)}>{label}</button>)}
+        </div>
+        {links.map((u, idx) => (
+          <a key={u} className="btn coral block" href={u} target="_blank" rel="noreferrer">
+            {links.length > 1 ? `開啟第 ${idx + 1} 段路線` : '在 Google Maps 開啟'}
+          </a>
+        ))}
+        {links.length > 1 && <p className="small muted">地點比較多，Google Maps 一次最多約 9 個中途點，所以分成 {links.length} 段。</p>}
+      </div>
+    </Sheet>
   )
 }
 
