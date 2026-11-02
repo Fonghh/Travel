@@ -146,6 +146,7 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
   const { state, token, save, toast } = useTrip()
   const [mode, setMode] = useState<'text' | 'link' | 'single'>('text')
   const [reel, setReel] = useState<ReelResult & { url: string }>()
+  const [reelErr, setReelErr] = useState('')
   const [text, setText] = useState('')
   const [source, setSource] = useState('')
   const [cands, setCands] = useState<Candidate[]>([])
@@ -198,12 +199,13 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
 
   async function findReel(url: string) {
     setReel(undefined)
+    setReelErr('')
     setBusy(true)
     try {
       const r = await api<ReelResult>(`/t/${state.trip.id}/reel`, { token, body: { url } })
       setReel({ ...r, url })
     } catch (e) {
-      toast((e as Error).message)
+      setReelErr((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -253,7 +255,7 @@ function AddSpotsSheet({ onClose }: { onClose: () => void }) {
 
         {mode === 'single' && <SingleSpotForm onDone={onClose} />}
 
-        {mode === 'link' && <ReelPanel reel={reel} busy={busy} onFind={findReel} onUse={useReel} onFallback={() => setMode('text')} />}
+        {mode === 'link' && <ReelPanel reel={reel} error={reelErr} busy={busy} onFind={findReel} onUse={useReel} onFallback={() => setMode('text')} />}
 
         {mode === 'text' && (
           <>
@@ -305,7 +307,7 @@ interface ReelResult {
   verified: boolean
 }
 
-function ReelPanel({ reel, busy, onFind, onUse, onFallback }: { reel?: ReelResult & { url: string }; busy: boolean; onFind: (url: string) => void; onUse: () => void; onFallback: () => void }) {
+function ReelPanel({ reel, error, busy, onFind, onUse, onFallback }: { reel?: ReelResult & { url: string }; error: string; busy: boolean; onFind: (url: string) => void; onUse: () => void; onFallback: () => void }) {
   const [url, setUrl] = useState(reel?.url ?? '')
   return (
     <div className="stack">
@@ -315,6 +317,12 @@ function ReelPanel({ reel, busy, onFind, onUse, onFallback }: { reel?: ReelResul
         <button className="btn sm" disabled={busy || !SOCIAL.test(url.trim())} onClick={() => onFind(url.trim())}>{busy ? '找…' : '🤖 找文字'}</button>
       </div>
       {busy && <div className="small">🔎 Gemini 搜尋中，大約要 10–30 秒…</div>}
+      {error && !busy && (
+        <div className="card flat coral stack" style={{ padding: 12, gap: 8 }}>
+          <div className="small" style={{ whiteSpace: 'pre-wrap' }}>😢 {error}</div>
+          <button className="btn white block" onClick={onFallback}>改用截圖文字</button>
+        </div>
+      )}
       {reel && !busy && (reel.found ? (
         <div className="card flat stack" style={{ padding: 12, gap: 8 }}>
           <div className="small">
